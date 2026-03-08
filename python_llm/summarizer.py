@@ -2,12 +2,12 @@ import google.generativeai as genai
 from pypdf import PdfReader
 import os
 from dotenv import load_dotenv
+import time
 
-# Load .env from parent folder
+# Load .env
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(dotenv_path)
 
-# Get the API key
 api_key = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=api_key)
@@ -31,9 +31,6 @@ def split_text(text, chunk_size=2000):
 
 
 def summarize_chunk(chunk, file_name="", topic=""):
-    """
-    Summarize a chunk with context about the file and topic
-    """
     prompt = f"""
     You are an expert summarizer.
 
@@ -45,25 +42,45 @@ def summarize_chunk(chunk, file_name="", topic=""):
     {chunk}
     """
 
-    response = model.generate_content(prompt)
-    return response.text
+    request_start = time.time()
+
+    response = model.generate_content(prompt, stream=True)
+
+    first_token_time = None
+    text = ""
+
+    for part in response:
+        if part.text:
+
+            if first_token_time is None:
+                first_token_time = time.time()
+                print(f"[Chunk] Streaming started at {first_token_time - request_start:.2f} seconds")
+
+            text += part.text
+
+    finish_time = time.time()
+    print(f"[Chunk] Streaming finished at {finish_time - request_start:.2f} seconds")
+    print("========================================================================")
+    return text
 
 
 def summarize_document(file, topic=""):
-    """
-    Summarize the PDF document using Gemini
-    """
+
+    start_total = time.time()
+
     text = read_pdf(file)
     chunks = split_text(text)
+
+    file_name = getattr(file, "name", "Document")
+
     summaries = []
 
-    file_name = getattr(file, 'name', 'Document')  # get uploaded file name
-
     for chunk in chunks:
-        summaries.append(summarize_chunk(chunk, file_name=file_name, topic=topic))
+        summary = summarize_chunk(chunk, file_name=file_name, topic=topic)
+        summaries.append(summary)
 
-    # Combine summaries
     combined = " ".join(summaries)
+
     final_prompt = f"""
     You are an expert summarizer.
 
@@ -75,5 +92,22 @@ def summarize_document(file, topic=""):
     {combined}
     """
 
-    final_summary = model.generate_content(final_prompt)
-    return final_summary.text
+    request_start = time.time()
+
+    response = model.generate_content(final_prompt, stream=True)
+
+    first_token_time = None
+
+    for part in response:
+        if part.text:
+
+            if first_token_time is None:
+                first_token_time = time.time()
+                print(f"[Final] Streaming started at {first_token_time - request_start:.2f} seconds")
+
+            yield part.text
+
+    finish_time = time.time()
+
+    print(f"[Final] Streaming finished at {finish_time - request_start:.2f} seconds")
+    print(f"[Total] Full summarization finished in {finish_time - start_total:.2f} seconds")
