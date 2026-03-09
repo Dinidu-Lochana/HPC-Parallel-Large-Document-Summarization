@@ -1,11 +1,11 @@
 [
   {
-    "file": "pride-and-prejudice-jane-austen.pdf",
+    "file": "Assignment_Problem_Slides.pdf",
     "status": "success",
-    "total_chars": 687746,
-    "estimated_tokens": 171936,
-    "chunks": 60,
-    "chunks_file": "chunks/pride-and-prejudice-jane-austen_pdf_chunks.json",
-    "elapsed_seconds": 37.5
+    "total_chars": 10030,
+    "estimated_tokens": 2507,
+    "chunks": 1,
+    "chunks_file": "chunks\\Assignment_Problem_Slides_pdf_chunks.json",
+    "elapsed_seconds": 0.7
   }
 ]

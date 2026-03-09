@@ -15,8 +15,8 @@ from typing import List, Dict
 # Add parent directory to path so we can import from preprocessing/
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from .document_extractor import extract_text
-from .text_chunker import chunk_document, save_chunks
+from document_extractor import extract_text
+from text_chunker import chunk_document, save_chunks
 
 
 SUPPORTED_EXTENSIONS = {".txt", ".pdf", ".docx"}

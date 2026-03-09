@@ -10,11 +10,14 @@ import time
 import argparse
 from typing import List, Dict
 
-import google.generativeai as genai
-from dotenv import load_dotenv
+from google import genai # type: ignore
+from google.genai import types # type: ignore
+from dotenv import load_dotenv # type: ignore
 
-# Load .env from project root
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
+# Load .env from same directory or one level up (try both)
+_env_same = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+_env_parent = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+load_dotenv(_env_same if os.path.exists(_env_same) else _env_parent)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
@@ -22,9 +25,8 @@ if not GEMINI_API_KEY:
         "GEMINI_API_KEY not found. Set it in your .env file:\n  GEMINI_API_KEY=your_key_here"
     )
 
-genai.configure(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-2.0-flash"
-model = genai.GenerativeModel(MODEL_NAME)
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_NAME = "models/gemini-2.0-flash"
 
 # ─── Prompt Templates ─────────────────────────────────────────────────────────
 
@@ -52,40 +54,40 @@ Final combined summary:"""
 
 # ─── Core Functions ────────────────────────────────────────────────────────────
 
-def summarize_chunk(chunk: Dict, retry_count: int = 5) -> str:
+def summarize_chunk(chunk: dict, retry_count: int = 5) -> str:
     """Call Gemini API to summarize a single chunk with detailed error logging."""
     prompt = CHUNK_SUMMARY_PROMPT.format(chunk_text=chunk["text"])
 
     for attempt in range(retry_count):
         try:
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(
                     temperature=0.3,
                     max_output_tokens=1024,
                 ),
             )
-            # Check for empty or blocked response
-            if not response.text or not response.text.strip():
+            text = response.text
+            if not text or not text.strip():
                 print(f"  [WARNING] Empty response for chunk {chunk['chunk_id']} on attempt {attempt+1}")
                 time.sleep(5)
                 continue
-            return response.text.strip()
+            return text.strip()
 
         except Exception as e:
             error_msg = str(e)
             print(f"  [ERROR] Attempt {attempt+1}/{retry_count} failed for chunk {chunk['chunk_id']}")
             print(f"  [ERROR] Reason: {error_msg}")
 
-            # Handle rate limit (429) with longer wait
             if "429" in error_msg or "quota" in error_msg.lower() or "rate" in error_msg.lower():
-                wait = 30 * (attempt + 1)  # 30s, 60s, 90s ...
+                wait = 30 * (attempt + 1)
                 print(f"  [RATE LIMIT] Waiting {wait}s before retry...")
             elif "500" in error_msg or "503" in error_msg:
                 wait = 10 * (attempt + 1)
                 print(f"  [SERVER ERROR] Waiting {wait}s before retry...")
             else:
-                wait = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                wait = 2 ** attempt
                 print(f"  [BACKOFF] Waiting {wait}s before retry...")
 
             time.sleep(wait)
@@ -104,7 +106,10 @@ def combine_summaries(chunk_summaries: List[str], retry_count: int = 3) -> str:
 
     for attempt in range(retry_count):
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+            )
             if response.text and response.text.strip():
                 return response.text.strip()
         except Exception as e:
@@ -112,12 +117,11 @@ def combine_summaries(chunk_summaries: List[str], retry_count: int = 3) -> str:
             print(f"  [Retry {attempt+1}/{retry_count}] Combine error: {e}. Waiting {wait}s...")
             time.sleep(wait)
 
-    # Fallback: just join the summaries
     print("  [WARNING] Combine failed — concatenating chunk summaries as fallback.")
     return "\n\n".join(chunk_summaries)
 
 
-def summarize_document(chunks_file: str, output_dir: str) -> Dict:
+def summarize_document(chunks_file: str, output_dir: str) -> dict:
     """Serially summarize all chunks from one document."""
     with open(chunks_file, "r", encoding="utf-8") as f:
         chunks = json.load(f)
@@ -131,8 +135,6 @@ def summarize_document(chunks_file: str, output_dir: str) -> Dict:
     print(f"\n{'='*60}")
     print(f"Summarizing: {doc_name}  ({total_chunks} chunks)")
     print(f"{'='*60}")
-
-    # Verify API key is valid before starting
     print(f"  [INFO] Using model: {MODEL_NAME}")
     print(f"  [INFO] API key loaded: {'Yes' if GEMINI_API_KEY else 'NO - THIS IS THE PROBLEM'}")
     print(f"  [INFO] API key prefix: {GEMINI_API_KEY[:8]}..." if GEMINI_API_KEY else "")
@@ -141,7 +143,7 @@ def summarize_document(chunks_file: str, output_dir: str) -> Dict:
     chunk_times = []
     start_total = time.time()
 
-    # ── Step 1: Summarize each chunk serially ──────────────────────────────
+    # ── Step 1: Summarize each chunk serially ─────────────────────────────
     for i, chunk in enumerate(chunks):
         t0 = time.time()
         print(f"\n  Chunk {i+1}/{total_chunks} (est. {chunk['estimated_tokens']} tokens)...", flush=True)
@@ -153,12 +155,12 @@ def summarize_document(chunks_file: str, output_dir: str) -> Dict:
         chunk_times.append(elapsed)
         print(f"  Chunk {i+1} done in ({elapsed:.2f}s)")
 
-        # Rate limit: Gemini free tier = 15 RPM → wait 5s between calls
+        # Rate limit: wait 5s between calls
         if i < total_chunks - 1:
             print(f"  [Rate limit] Waiting 5s before next chunk...", flush=True)
             time.sleep(5)
 
-    # ── Step 2: Combine all chunk summaries ────────────────────────────────
+    # ── Step 2: Combine all chunk summaries ───────────────────────────────
     print(f"\n  Combining {total_chunks} summaries...", end=" ", flush=True)
     t0 = time.time()
 
@@ -172,7 +174,7 @@ def summarize_document(chunks_file: str, output_dir: str) -> Dict:
 
     total_time = time.time() - start_total
 
-    # ── Step 3: Save output ────────────────────────────────────────────────
+    # ── Step 3: Save output ───────────────────────────────────────────────
     os.makedirs(output_dir, exist_ok=True)
     safe_name = doc_name.replace(" ", "_").replace(".", "_")
     out_path = os.path.join(output_dir, f"{safe_name}_summary.txt")
@@ -203,7 +205,7 @@ def summarize_document(chunks_file: str, output_dir: str) -> Dict:
 def run_serial(
     input_path: str,
     output_dir: str = "summaries/serial",
-) -> List[Dict]:
+) -> List[dict]:
     """Run serial summarization on one chunks file or a folder of chunks files."""
 
     if os.path.isfile(input_path) and input_path.endswith(".json"):

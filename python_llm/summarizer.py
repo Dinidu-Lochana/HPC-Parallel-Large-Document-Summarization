@@ -1,7 +1,7 @@
-import google.generativeai as genai
-from pypdf import PdfReader
+import google.generativeai as genai 
+from pypdf import PdfReader 
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv 
 
 # Load .env from parent folder
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")

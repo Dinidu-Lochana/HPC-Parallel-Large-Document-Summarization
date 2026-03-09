@@ -14,12 +14,13 @@ import sys
 import os
 import argparse
 
-# Make sure both subdirectories are importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "preprocessing"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "serial"))
+# Add subfolders to path so modules can be imported
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(BASE_DIR, "preprocessing"))
+sys.path.insert(0, os.path.join(BASE_DIR, "serial"))
 
-from preprocess import run_pipeline as run_preprocessing
-from serial_summarizer import run_serial
+from preprocess import run_pipeline as run_preprocessing # type: ignore
+from serial_summarizer import run_serial # type: ignore
 
 
 def main():

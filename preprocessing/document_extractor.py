@@ -16,7 +16,7 @@ def extract_txt(file_path: str) -> str:
 def extract_docx(file_path: str) -> str:
     """Extract text from a .docx file."""
     try:
-        import docx
+        import docx 
     except ImportError:
         raise ImportError("python-docx not installed. Run: pip install python-docx")
 
@@ -28,7 +28,7 @@ def extract_docx(file_path: str) -> str:
 def extract_pdf(file_path: str) -> str:
     """Extract text from a digital (non-scanned) PDF."""
     try:
-        from pypdf import PdfReader
+        from pypdf import PdfReader 
     except ImportError:
         raise ImportError("pypdf not installed. Run: pip install pypdf")
 
@@ -44,10 +44,10 @@ def extract_pdf(file_path: str) -> str:
 def extract_scanned_pdf(file_path: str) -> str:
     """Extract text from a scanned PDF using PaddleOCR."""
     try:
-        from paddleocr import PaddleOCR
-        import fitz  # PyMuPDF
-        import numpy as np
-        from PIL import Image
+        from paddleocr import PaddleOCR 
+        import fitz  
+        import numpy as np 
+        from PIL import Image 
         import io
     except ImportError:
         raise ImportError(

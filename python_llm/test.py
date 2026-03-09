@@ -1,6 +1,6 @@
-import google.generativeai as genai
+import google.generativeai as genai 
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv 
 
 # Load .env from parent folder
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
