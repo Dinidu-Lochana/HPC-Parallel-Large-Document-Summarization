@@ -1,14 +1,10 @@
 import google.generativeai as genai
 import os
 import sys
+from pypdf import PdfReader
 from dotenv import load_dotenv
 
-# Optional PDF support - only needed for web UI
-try:
-    from pypdf import PdfReader
-    PDF_SUPPORT = True
-except ImportError:
-    PDF_SUPPORT = False
+
 
 # Load .env from parent folder
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
