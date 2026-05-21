@@ -111,3 +111,4 @@ def summarize_document(file, topic=""):
 
     print(f"[Final] Streaming finished at {finish_time - request_start:.2f} seconds")
     print(f"[Total] Full summarization finished in {finish_time - start_total:.2f} seconds")
+    print("===============================================================================")
