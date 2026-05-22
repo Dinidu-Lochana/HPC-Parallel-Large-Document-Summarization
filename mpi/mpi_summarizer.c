@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <ctype.h>
 
 #define MAX_CHUNK_SIZE 4096
 #define MAX_SUMMARY_SIZE 2048
@@ -201,20 +202,74 @@ void worker_process(int rank, char *topic) {
 }
 
 int read_document_chunks(char *filename, DocumentChunk **chunks) {
-    FILE *file = fopen(filename, "r");
-    if (!file) {
-        printf("Error: Cannot open file %s\n", filename);
-        return -1;
+    char *full_text = NULL;
+    long file_size = 0;
+    
+    // Check if file is PDF
+    int is_pdf = 0;
+    char *ext = strrchr(filename, '.');
+    if (ext != NULL) {
+        char ext_lower[10];
+        int i;
+        for (i = 0; ext[i] && i < 9; i++) {
+            ext_lower[i] = tolower(ext[i]);
+        }
+        ext_lower[i] = '\0';
+        if (strcmp(ext_lower, ".pdf") == 0) {
+            is_pdf = 1;
+        }
     }
     
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    
-    char *full_text = (char *)malloc(file_size + 1);
-    fread(full_text, 1, file_size, file);
-    full_text[file_size] = '\0';
-    fclose(file);
+    if (is_pdf) {
+        // Extract text from PDF using Python
+        char temp_txt_file[256];
+        sprintf(temp_txt_file, "temp_pdf_extract_%d.txt", getpid());
+        
+        char command[1024];
+        sprintf(command, "python3 ../python_llm/summarizer.py extract_pdf \"%s\" \"%s\"", 
+                filename, temp_txt_file);
+        
+        int result = system(command);
+        if (result != 0) {
+            printf("Error: Failed to extract text from PDF\n");
+            return -1;
+        }
+        
+        // Read the extracted text
+        FILE *file = fopen(temp_txt_file, "r");
+        if (!file) {
+            printf("Error: Cannot open extracted text file\n");
+            return -1;
+        }
+        
+        fseek(file, 0, SEEK_END);
+        file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        
+        full_text = (char *)malloc(file_size + 1);
+        fread(full_text, 1, file_size, file);
+        full_text[file_size] = '\0';
+        fclose(file);
+        
+        // Clean up temp file
+        remove(temp_txt_file);
+    } else {
+        // Read text file directly
+        FILE *file = fopen(filename, "r");
+        if (!file) {
+            printf("Error: Cannot open file %s\n", filename);
+            return -1;
+        }
+        
+        fseek(file, 0, SEEK_END);
+        file_size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        
+        full_text = (char *)malloc(file_size + 1);
+        fread(full_text, 1, file_size, file);
+        full_text[file_size] = '\0';
+        fclose(file);
+    }
     
     int chunk_size = 2000;
     int num_chunks = (file_size + chunk_size - 1) / chunk_size;
@@ -251,7 +306,7 @@ void call_python_summarizer(char *chunk_text, char *topic, char *output_summary)
     }
     
     char command[1024];
-    sprintf(command, "python mpi_python_wrapper.py \"%s\" \"%s\" \"%s\"", 
+    sprintf(command, "python3 ../python_llm/summarizer.py summarize_chunk \"%s\" \"%s\" \"%s\"", 
             temp_input_file, topic, temp_output_file);
     
     system(command);
@@ -285,7 +340,7 @@ void combine_summaries(ChunkSummary *summaries, int num_summaries, char *final_s
     sprintf(output_file, "temp_final_%d.txt", getpid());
     
     char command[1024];
-    sprintf(command, "python mpi_final_combiner.py \"%s\" \"%s\" \"%s\"", 
+    sprintf(command, "python3 ../python_llm/summarizer.py combine_summaries \"%s\" \"%s\" \"%s\"", 
             combined_file, topic, output_file);
     
     system(command);

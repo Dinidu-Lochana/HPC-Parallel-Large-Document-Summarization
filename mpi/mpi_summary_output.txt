@@ -1,0 +1,11 @@
+MPI Parallel Document Summarization Results
+===========================================
+
+Input File: Removing_Reflections_from_RAW_Photos.pdf
+Topic: Reflection Removal
+Number of Processes: 4
+Number of Chunks: 28
+Execution Time: 38.2277 seconds
+
+FINAL SUMMARY:
+[Error during final summarization: 404 models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.]
