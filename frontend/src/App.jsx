@@ -9,6 +9,19 @@ const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 /* ── methods ──────────────────────────────────────────────────────────────── */
 const METHODS = [
   {
+    id:    'serial',
+    label: 'Serial',
+    tag:   'Baseline',
+    desc:  'Single-core sequential — use as speedup reference',
+    icon:  <Clock size={14} />,
+    ring:  'ring-gray-500',
+    activeBg:   'bg-gray-500/10 border-gray-500',
+    activeText: 'text-gray-300',
+    badge:      'bg-gray-500/20 text-gray-300',
+    slider:     'accent-gray-500',
+    val:        'text-gray-300',
+  },
+  {
     id:    'mpi',
     label: 'MPI',
     tag:   'Distributed',
@@ -120,8 +133,8 @@ export default function App() {
     form.append('file', file)
     form.append('topic', topic.trim())
     form.append('method', method)
-    form.append('processes', processes)
-    form.append('threads', threads)
+    form.append('processes', method === 'serial' ? 1 : processes)
+    form.append('threads',   method === 'serial' ? 1 : threads)
 
     try {
       const res  = await fetch(`${BACKEND}/summarize`, { method: 'POST', body: form })
@@ -137,7 +150,7 @@ export default function App() {
 
   const active     = METHODS.find(m => m.id === method)
   const rm         = result?.metrics || {}
-  const idealUnits = method === 'mpi' ? processes - 1 : method === 'openmp' ? threads : processes * threads
+  const idealUnits = method === 'serial' ? 1 : method === 'mpi' ? processes : method === 'openmp' ? threads : processes * threads
 
   return (
     /*
@@ -158,6 +171,7 @@ export default function App() {
           </span>
           <span className="hidden md:flex items-center gap-1.5 text-gray-600 text-xs">
             <span>·</span>
+            <span>Serial</span><span>·</span>
             <span>MPI</span><span>·</span>
             <span>OpenMP</span><span>·</span>
             <span>Hybrid</span><span>·</span>
@@ -269,6 +283,12 @@ export default function App() {
 
             {/* Sliders */}
             <div className="space-y-4">
+              {method === 'serial' && (
+                <div className="rounded-xl bg-gray-500/10 border border-gray-500/30 px-3 py-2 text-center">
+                  <span className="text-xs text-gray-400">No parallelism — </span>
+                  <span className="text-sm font-bold text-gray-300">1 process · 1 thread</span>
+                </div>
+              )}
               {(method === 'mpi' || method === 'hybrid') && (
                 <div>
                   <div className="flex justify-between mb-2">

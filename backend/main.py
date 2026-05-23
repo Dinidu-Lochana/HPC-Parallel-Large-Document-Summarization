@@ -106,10 +106,21 @@ def build_command(method: str, doc_path: str, topic: str,
             )
         return ["mpirun", "-np", str(processes), str(binary), doc_path, topic, str(threads)]
 
+    elif method == "serial":
+        binary = bin_dir / "serial_summarizer"
+        if not binary.exists():
+            raise HTTPException(
+                status_code=500,
+                detail="bin/serial_summarizer not found — compile with: "
+                       "gcc -O2 -o bin/serial_summarizer serial/serial_summarizer.c"
+            )
+        return [str(binary), doc_path, topic]
+
     raise HTTPException(status_code=400, detail=f"Unknown method: {method}")
 
 
 OUTPUT_FILES = {
+    "serial": "serial_output.txt",
     "mpi":    "mpi_output.txt",
     "openmp": "omp_output.txt",
     "hybrid": "hybrid_output.txt",
@@ -127,6 +138,7 @@ def list_methods():
     """Return available methods and whether their binaries are compiled."""
     bin_dir = PROJECT_ROOT / "bin"
     return {
+        "serial": (bin_dir / "serial_summarizer").exists(),
         "mpi":    (bin_dir / "mpi_summarizer").exists(),
         "openmp": (bin_dir / "openmp_summarizer").exists(),
         "hybrid": (bin_dir / "hybrid_summarizer").exists(),
