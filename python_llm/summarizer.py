@@ -207,10 +207,6 @@ if __name__ == "__main__":
             print("Usage: python summarizer.py extract_pdf <pdf_file> <output_txt_file>")
             sys.exit(1)
         
-        if not PDF_SUPPORT:
-            print("Error: pypdf is not installed. Cannot extract PDF text.")
-            sys.exit(1)
-        
         pdf_file = sys.argv[2]
         output_file = sys.argv[3]
         
