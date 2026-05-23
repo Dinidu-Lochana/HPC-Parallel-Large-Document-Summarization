@@ -209,3 +209,104 @@ async def summarize_cuda(
             os.remove(temp_file_path)
         if os.path.exists(txt_file_path):
             os.remove(txt_file_path)
+
+@app.post("/summarize-cuda-mpi")
+async def summarize_cuda_mpi(file: UploadFile = File(...), topic: str = Form(None), nodes: int = Form(4)):
+    """
+    Endpoint for parallel document summarization using Hybrid CUDA + MPI (GPU Boundaries + Multi-node Python Execution)
+    """
+    if not file.filename.endswith('.pdf') and not file.filename.endswith('.txt'):
+        raise HTTPException(status_code=400, detail="Only PDF and TXT files are supported")
+        
+    temp_dir = tempfile.gettempdir()
+    unique_id = str(uuid.uuid4())
+    temp_file_path = os.path.join(temp_dir, f"{unique_id}_{file.filename}")
+    txt_file_path = os.path.join(temp_dir, f"{unique_id}.txt")
+    
+    try:
+        # Save the uploaded file temporarily
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # PDF, extract text first for the CUDA binary
+        if file.filename.lower().endswith('.pdf'):
+            from summarizer import read_pdf
+            with open(temp_file_path, "rb") as pdf_file:
+                extracted_text = read_pdf(pdf_file)
+            with open(txt_file_path, "w", encoding="utf-8") as txt_file:
+                txt_file.write(extracted_text)
+            input_for_cuda = txt_file_path
+        else:
+            input_for_cuda = temp_file_path
+
+        # Path to the CUDA executable
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        cuda_exe = os.path.join(base_dir, "cuda-mpi", "cuda_mpi_summarizer")
+        
+        # Add .exe for Windows
+        is_wsl = False
+        if not os.path.exists(cuda_exe):
+            if os.path.exists(cuda_exe + ".exe"):
+                cuda_exe += ".exe"
+        elif os.name == 'nt' and not cuda_exe.endswith('.exe'):
+            is_wsl = True
+            
+        if not os.path.exists(cuda_exe):
+            raise HTTPException(status_code=500, detail=f"CUDA+MPI executable not found at {cuda_exe}. Please compile it first.")
+            
+        # Run Hybrid subprocess
+        if is_wsl:
+            # Convert Windows paths to WSL paths (e.g. C:\Temp\a.txt -> /mnt/c/Temp/a.txt)
+            wsl_input = input_for_cuda.replace('\\', '/')
+            if len(wsl_input) > 2 and wsl_input[1:3] == ':/':
+                wsl_input = f"/mnt/{wsl_input[0].lower()}/{wsl_input[3:]}"
+                
+            wsl_exe = cuda_exe.replace('\\', '/')
+            if len(wsl_exe) > 2 and wsl_exe[1:3] == ':/':
+                wsl_exe = f"/mnt/{wsl_exe[0].lower()}/{wsl_exe[3:]}"
+                
+            cmd = ["wsl", "mpirun", "-np", str(nodes), wsl_exe, wsl_input]
+        else:
+            cmd = ["mpiexec", "-n", str(nodes), cuda_exe, input_for_cuda]
+            
+        if topic:
+            cmd.append(topic)
+            
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if process.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Hybrid execution failed: {process.stderr}\n\nSTDOUT: {process.stdout}")
+            
+        output_text = process.stdout
+        
+        print(f"\n--- HYBRID CUDA+MPI (Nodes: {nodes}) EXECUTION LOGS ---")
+        print(output_text)
+        print("---------------------------\n")
+        
+        marker = "FINAL SUMMARY\n=================================================\n"
+        summary_start_idx = output_text.find(marker)
+        
+        if summary_start_idx != -1:
+            summary_str = output_text[summary_start_idx + len(marker):].strip()
+            end_idx = summary_str.rfind("=================================================")
+            if end_idx != -1:
+                summary_str = summary_str[:end_idx].strip()
+        else:
+            summary_str = output_text
+            
+        return JSONResponse(content={
+            "filename": file.filename,
+            "topic": topic,
+            "nodes": nodes,
+            "summary": summary_str,
+            "logs": output_text  
+        })
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        if os.path.exists(txt_file_path):
+            os.remove(txt_file_path)

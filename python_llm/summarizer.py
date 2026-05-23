@@ -76,17 +76,36 @@ if __name__ == "__main__":
         summary = summarize_chunk(text, topic=topic)
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(summary)
-
-    elif command == "combine_summaries" and len(sys.argv) == 5:
-        _, _, input_file, topic, output_file = sys.argv
-        text  = read_text_file(input_file)
-        final = combine_summaries(text, topic=topic)
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(final)
-
-    elif command == "extract_pdf" and len(sys.argv) == 4:
-        _, _, pdf_file, output_file = sys.argv
-        with open(pdf_file, "rb") as f:
+    
+    elif command == "combine_summaries":
+        if len(sys.argv) != 5:
+            print("Usage: python summarizer.py combine_summaries <input_file> <topic> <output_file>")
+            sys.exit(1)
+        
+        input_file = sys.argv[2]
+        topic = sys.argv[3]
+        output_file = sys.argv[4]
+        
+        # Read combined summaries
+        summaries_text = read_text_file(input_file)
+        
+        # Combine
+        final_summary = combine_summaries(summaries_text, topic)
+        
+        # Write output
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(final_summary)
+    
+    elif command == "extract_pdf":
+        if len(sys.argv) != 4:
+            print("Usage: python summarizer.py extract_pdf <pdf_file> <output_txt_file>")
+            sys.exit(1)
+        
+        pdf_file = sys.argv[2]
+        output_file = sys.argv[3]
+        
+        # Extract text from PDF
+        with open(pdf_file, 'rb') as f:
             text = read_pdf(f)
         with open(output_file, "w", encoding="utf-8") as f:
             f.write(text)
