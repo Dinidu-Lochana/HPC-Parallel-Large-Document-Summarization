@@ -1,12 +1,25 @@
+<<<<<<< HEAD
+=======
 from google import genai
+>>>>>>> d99e81fb0b5e45b62231d7aba116991354717431
 import os
 import sys
+from pathlib import Path
 from pypdf import PdfReader
 from dotenv import load_dotenv
+<<<<<<< HEAD
+from groq import Groq
+=======
 import time
 from datetime import datetime
+>>>>>>> d99e81fb0b5e45b62231d7aba116991354717431
 
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+<<<<<<< HEAD
+MODEL  = "llama-3.3-70b-versatile"
+client = Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+=======
 # Load .env
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(dotenv_path)
@@ -14,32 +27,36 @@ load_dotenv(dotenv_path)
 api_key = os.getenv("GEMINI_API_KEY")
 
 client = genai.Client(api_key=api_key)
+>>>>>>> d99e81fb0b5e45b62231d7aba116991354717431
 
 
 def read_pdf(file):
     reader = PdfReader(file)
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text()
-    return text
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
 def read_text_file(file_path):
-    """
-    Read a plain text file
-    """
-    with open(file_path, 'r', encoding='utf-8') as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
 
 
 def split_text(text, chunk_size=2000):
-    chunks = []
-    for i in range(0, len(text), chunk_size):
-        chunks.append(text[i:i+chunk_size])
-    return chunks
+    return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
 
 def summarize_chunk(chunk, file_name="", topic=""):
+<<<<<<< HEAD
+    prompt = (
+        f"File: {file_name}\nTopic: {topic}\n\n"
+        f"Summarize the following text clearly and concisely:\n\n{chunk}"
+    )
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=512,
+    )
+    return response.choices[0].message.content
+=======
     prompt = f"""
     You are an expert summarizer.
 
@@ -106,6 +123,7 @@ def summarize_document(file, topic="", file_name=None):
     """
 
     request_start = time.time()
+>>>>>>> d99e81fb0b5e45b62231d7aba116991354717431
 
     response = client.models.generate_content_stream(
         model="gemini-2.5-flash",
@@ -128,60 +146,64 @@ def summarize_document(file, topic="", file_name=None):
     print(f"[Total] Full summarization finished in {finish_time - start_total:.2f} seconds")
 
 def combine_summaries(summaries_text, topic=""):
-    """
-    Combine multiple summaries into a coherent final summary
-    Used by MPI to merge chunk summaries
-    """
-    prompt = f"""
-    You are an expert summarizer.
-    
-    Topic: {topic}
-    
-    Combine the following summaries into a clear, coherent final summary:
-    
-    {summaries_text}
-    """
-    
+    prompt = (
+        f"Topic: {topic}\n\n"
+        f"Combine the following summaries into a clear, coherent final summary:\n\n{summaries_text}"
+    )
     try:
+<<<<<<< HEAD
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content
+=======
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt
         )
         return response.text
+>>>>>>> d99e81fb0b5e45b62231d7aba116991354717431
     except Exception as e:
-        return f"[Error during final summarization: {str(e)}]"
+        return f"[Error during final summarization: {e}]"
 
 
+def summarize_document(file, topic=""):
+    text     = read_pdf(file)
+    chunks   = split_text(text)
+    file_name = getattr(file, "name", "Document")
+    summaries = [summarize_chunk(c, file_name=file_name, topic=topic) for c in chunks]
+    return combine_summaries("\n\n".join(summaries), topic=topic)
+
+
+# ── CLI interface used by MPI C code ─────────────────────────────────────────
 if __name__ == "__main__":
-    # CLI interface for MPI to call
     if len(sys.argv) < 2:
         print("Usage: python summarizer.py <command> [args...]")
-        print("Commands:")
-        print("  summarize_chunk <input_file> <topic> <output_file>")
-        print("  combine_summaries <input_file> <topic> <output_file>")
-        print("  extract_pdf <pdf_file> <output_txt_file>")
         sys.exit(1)
-    
+
     command = sys.argv[1]
-    
-    if command == "summarize_chunk":
-        if len(sys.argv) != 5:
-            print("Usage: python summarizer.py summarize_chunk <input_file> <topic> <output_file>")
-            sys.exit(1)
-        
-        input_file = sys.argv[2]
-        topic = sys.argv[3]
-        output_file = sys.argv[4]
-        
-        # Read chunk text
-        chunk_text = read_text_file(input_file)
-        
-        # Summarize
-        summary = summarize_chunk(chunk_text, file_name="", topic=topic)
-        
-        # Write output
-        with open(output_file, 'w', encoding='utf-8') as f:
+
+    if command == "summarize_chunk" and len(sys.argv) == 5:
+        _, _, input_file, topic, output_file = sys.argv
+        text    = read_text_file(input_file)
+        summary = summarize_chunk(text, topic=topic)
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(summary)
+<<<<<<< HEAD
+
+    elif command == "combine_summaries" and len(sys.argv) == 5:
+        _, _, input_file, topic, output_file = sys.argv
+        text  = read_text_file(input_file)
+        final = combine_summaries(text, topic=topic)
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(final)
+
+    elif command == "extract_pdf" and len(sys.argv) == 4:
+        _, _, pdf_file, output_file = sys.argv
+        with open(pdf_file, "rb") as f:
+=======
     
     elif command == "combine_summaries":
         if len(sys.argv) != 5:
@@ -212,11 +234,15 @@ if __name__ == "__main__":
         
         # Extract text from PDF
         with open(pdf_file, 'rb') as f:
+>>>>>>> d99e81fb0b5e45b62231d7aba116991354717431
             text = read_pdf(f)
-        
-        # Write to text file
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(text)
-    
+
     else:
+<<<<<<< HEAD
+        print(f"Unknown command or wrong args: {sys.argv[1:]}")
+        sys.exit(1)
+=======
         print(f"Unknown command: {command}")
+>>>>>>> d99e81fb0b5e45b62231d7aba116991354717431

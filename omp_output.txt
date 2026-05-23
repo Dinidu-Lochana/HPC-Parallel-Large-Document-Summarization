@@ -1,0 +1,6 @@
+[Combination error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.3-70b-versatile` in organization `org_01ks8knk40evga1hm19ezbvwh3` service tier `on_demand` on tokens per day (TPD): Limit 100000, Used 99278, Requested 1226. Please try again in 7m15.456s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}]
+
+--- Chunk Summaries ---
+=== Chunk 1 ===
+[Summarization error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.3-70b-versatile` in organization `org_01ks8knk40evga1hm19ezbvwh3` service tier `on_demand` on tokens per day (TPD): Limit 100000, Used 99279, Requested 837. Please try again in 1m40.224s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}]
+
