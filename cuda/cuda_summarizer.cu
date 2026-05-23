@@ -175,6 +175,16 @@ int main(int argc, char *argv[]) {
     printf("CUDA Parallel Document Summarization\n");
     printf("=================================================\n");
     
+    // Capture overall start time
+    time_t prog_start_raw;
+    char prog_start_buf[80];
+    struct timespec prog_start_ts;
+    time(&prog_start_raw);
+    strftime(prog_start_buf, sizeof(prog_start_buf), "%I:%M:%S %p", localtime(&prog_start_raw));
+    clock_gettime(CLOCK_MONOTONIC, &prog_start_ts);
+    printf("[Cuda Summarizer] Execution started at: %s\n", prog_start_buf);
+    printf("=================================================\n");
+    
     // Read file
     FILE *file = fopen(input_file, "r");
     if (!file) {
@@ -213,27 +223,20 @@ int main(int argc, char *argv[]) {
     // Process boundaries to create chunks
     int num_chunks = 0;
     int current_start = 0;
-    ChunkData chunk_data[MAX_CHUNKS];
+    
+    // Heap-allocate chunk_data to avoid stack overflow on large documents
+    ChunkData *chunk_data = (ChunkData *)malloc(MAX_CHUNKS * sizeof(ChunkData));
     
     for (int i = 0; i < MAX_CHUNKS; i++) {
         if (current_start >= file_size) break;
         
+        // Use the GPU-computed word-safe boundary directly
         int end_pos = host_boundaries[i];
-        if (end_pos == -1) break; 
-        
-        // Calculate exact boundaries
-        if (i > 0) {
-            end_pos = current_start + CHUNK_SIZE;
-            if (end_pos > file_size) end_pos = file_size;
-            
-            int temp = end_pos;
-            while (temp > current_start && host_text[temp] != ' ' && host_text[temp] != '\n') {
-                temp--;
-            }
-            if (temp != current_start) end_pos = temp;
-        }
+        if (end_pos == -1) break;
+        if (end_pos > file_size) end_pos = file_size;
         
         int chunk_length = end_pos - current_start;
+        if (chunk_length <= 0) break;
         
         chunk_data[num_chunks].chunk_id = num_chunks;
         chunk_data[num_chunks].text = (char *)malloc(chunk_length + 1);
@@ -249,8 +252,8 @@ int main(int argc, char *argv[]) {
     printf("Document split into %d chunks using CUDA.\n", num_chunks);
     printf("Processing chunks in parallel using pthreads...\n");
     
-    // Create threads for parallel API requests
-    pthread_t threads[MAX_CHUNKS];
+    // Heap-allocate threads array to avoid stack overflow on large documents
+    pthread_t *threads = (pthread_t *)malloc(num_chunks * sizeof(pthread_t));
     for (int i = 0; i < num_chunks; i++) {
         pthread_create(&threads[i], NULL, summarize_chunk_thread, &chunk_data[i]);
     }
@@ -259,6 +262,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < num_chunks; i++) {
         pthread_join(threads[i], NULL);
     }
+    free(threads);
     
     printf("\nAll chunks processed. Combining summaries...\n");
     
@@ -271,12 +275,25 @@ int main(int argc, char *argv[]) {
     printf("%s\n", final_summary);
     printf("=================================================\n");
     
+    // Print execution finished time and total elapsed
+    time_t prog_end_raw;
+    char prog_end_buf[80];
+    struct timespec prog_end_ts;
+    time(&prog_end_raw);
+    strftime(prog_end_buf, sizeof(prog_end_buf), "%I:%M:%S %p", localtime(&prog_end_raw));
+    clock_gettime(CLOCK_MONOTONIC, &prog_end_ts);
+    double total_elapsed = (prog_end_ts.tv_sec - prog_start_ts.tv_sec) + (prog_end_ts.tv_nsec - prog_start_ts.tv_nsec) / 1e9;
+    printf("[Cuda Summarizer] Execution finished at: %s\n", prog_end_buf);
+    printf("[Cuda Summarizer] Total execution time: %.2f seconds\n", total_elapsed);
+    printf("=================================================\n");
+    
     // Cleanup
     free(host_text);
     free(host_boundaries);
     for (int i = 0; i < num_chunks; i++) {
         free(chunk_data[i].text);
     }
+    free(chunk_data);
     cudaFree(device_text);
     cudaFree(device_boundaries);
     
