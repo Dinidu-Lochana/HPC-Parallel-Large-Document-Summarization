@@ -1,21 +1,19 @@
-import google.generativeai as genai
+from google import genai
 import os
 import sys
 from pypdf import PdfReader
 from dotenv import load_dotenv
 import time
+from datetime import datetime
 
 
-# Load .env from parent folder
 # Load .env
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(dotenv_path)
 
 api_key = os.getenv("GEMINI_API_KEY")
 
-genai.configure(api_key=api_key)
-
-model = genai.GenerativeModel("gemini-2.5-flash")
+client = genai.Client(api_key=api_key)
 
 
 def read_pdf(file):
@@ -55,7 +53,10 @@ def summarize_chunk(chunk, file_name="", topic=""):
 
     request_start = time.time()
 
-    response = model.generate_content(prompt, stream=True)
+    response = client.models.generate_content_stream(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
 
     first_token_time = None
     text = ""
@@ -65,7 +66,8 @@ def summarize_chunk(chunk, file_name="", topic=""):
 
             if first_token_time is None:
                 first_token_time = time.time()
-                print(f"[Chunk] Streaming started at {first_token_time - request_start:.2f} seconds")
+                exact_time = datetime.now().strftime("%I:%M:%S %p")
+                print(f"[Chunk] Streaming started at {exact_time} ({first_token_time - request_start:.2f} seconds elapsed)")
 
             text += part.text
 
@@ -75,14 +77,14 @@ def summarize_chunk(chunk, file_name="", topic=""):
     return text
 
 
-def summarize_document(file, topic=""):
+def summarize_document(file, topic="", file_name=None):
 
     start_total = time.time()
 
     text = read_pdf(file)
     chunks = split_text(text)
 
-    file_name = getattr(file, "name", "Document")
+    file_name = file_name or getattr(file, "name", "Document")
 
     summaries = []
 
@@ -103,9 +105,27 @@ def summarize_document(file, topic=""):
     {combined}
     """
 
-    final_summary = model.generate_content(final_prompt)
-    return final_summary.text
+    request_start = time.time()
 
+    response = client.models.generate_content_stream(
+        model="gemini-2.5-flash",
+        contents=final_prompt
+    )
+
+    first_token_time = None
+
+    for part in response:
+        if part.text:
+            if first_token_time is None:
+                first_token_time = time.time()
+                exact_time = datetime.now().strftime("%I:%M:%S %p")
+                print(f"[Final] Streaming started at {exact_time} ({first_token_time - request_start:.2f} seconds elapsed)")
+
+            yield part.text
+
+    finish_time = time.time()
+    print(f"[Final] Streaming finished at {finish_time - request_start:.2f} seconds")
+    print(f"[Total] Full summarization finished in {finish_time - start_total:.2f} seconds")
 
 def combine_summaries(summaries_text, topic=""):
     """
@@ -123,7 +143,10 @@ def combine_summaries(summaries_text, topic=""):
     """
     
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
         return response.text
     except Exception as e:
         return f"[Error during final summarization: {str(e)}]"
@@ -201,23 +224,3 @@ if __name__ == "__main__":
     
     else:
         print(f"Unknown command: {command}")
-        sys.exit(1)
-    request_start = time.time()
-
-    response = model.generate_content(final_prompt, stream=True)
-
-    first_token_time = None
-
-    for part in response:
-        if part.text:
-
-            if first_token_time is None:
-                first_token_time = time.time()
-                print(f"[Final] Streaming started at {first_token_time - request_start:.2f} seconds")
-
-            yield part.text
-
-    finish_time = time.time()
-
-    print(f"[Final] Streaming finished at {finish_time - request_start:.2f} seconds")
-    print(f"[Total] Full summarization finished in {finish_time - start_total:.2f} seconds")
