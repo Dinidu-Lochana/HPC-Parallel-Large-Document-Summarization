@@ -1,0 +1,17 @@
+The document discusses a system for removing reflections from images, particularly those taken through glass. The system operates on linear (RAW) photos and can use an optional contextual photo to help disambiguate reflections. It produces high-quality, reflection-free images at full resolution, outperforming existing methods that use lower-resolution, tone-mapped images.
+
+The system is trained on synthetic data, which allows for training on over 1 million examples and improves performance. It also operates on raw, scene-referred images, which improves results compared to working with display-referred images. The proposed system can remove reflections effectively and efficiently, even at high resolutions.
+
+The process of transforming raw data into display-referred images involves several steps, and the system uses an earlier step in the process to simulate realistic reflections. The system also uses a novel upsampler to produce results at the input image resolution.
+
+The system is designed to handle reflections in consumer photography, aiming to minimize user interactions and produce results quickly. Users can capture an optional contextual photo, which can be taken separately and without registration, allowing for faster processing and review of results.
+
+The system outperforms prior works, such as Zhang and DSRNet, and can separate reflections from the original image in various real-world cases. The use of context photos can also improve the accuracy of reflection removal, particularly in cases where there is ambiguity about the color of the reflection scene.
+
+The system's performance is demonstrated through various visual comparisons and empirical SSIM values. The system also facilitates aesthetic editing and error correction, as demonstrated in reflection editing examples.
+
+The document also mentions various references related to computer vision and image processing, specifically focusing on reflection removal techniques. These references include conference papers and publications from different researchers, exploring different methods for removing reflections from images.
+
+Overall, the system is a powerful tool for removing reflections from images, and its performance and efficiency make it suitable for consumer photography. The system's ability to operate on raw images, use contextual photos, and produce high-quality results at full resolution make it a significant improvement over existing methods.
+
+However, it is worth noting that the topic of the document appears to be unrelated to the physical material "paper", but rather "paper" as in academic publications. The document's focus is on computer vision and image processing, specifically on the removal of reflections from images.

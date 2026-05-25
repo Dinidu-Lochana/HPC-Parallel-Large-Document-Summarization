@@ -1,304 +1,255 @@
-#include <mpi.h>
+/*
+ * MPI Parallel Document Summarizer
+ * Pattern : Dynamic master-worker
+ * Build   : mpicc -O2 -Wall -o bin/mpi_summarizer mpi/mpi_summarizer.c
+ * Run     : mpirun -np 4 ./bin/mpi_summarizer <doc.txt> "<topic>"
+ *           (must be run from project root)
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <mpi.h>
+#include <unistd.h>     /* sysconf */
 
-#define MAX_CHUNK_SIZE 4096
-#define MAX_SUMMARY_SIZE 2048
-#define MAX_FILENAME_SIZE 256
+/* ── tunables ────────────────────────────────────────────────────────────── */
+#define CHUNK_SIZE   2000   /* bytes per document chunk                       */
+#define MAX_CONTENT  4096   /* chunk buffer (slightly larger than CHUNK_SIZE) */
+#define MAX_SUMMARY  2048   /* summary buffer                                 */
+#define MAX_CHUNKS   500    /* maximum number of chunks                       */
+#define TAG_WORK     1
+#define TAG_RESULT   2
 
-typedef struct {
-    char text[MAX_CHUNK_SIZE];
-    int chunk_id;
-    int text_length;
-} DocumentChunk;
+/* ── fixed-size message structs (sent as MPI_BYTE) ───────────────────────── */
+typedef struct { int id; char text[MAX_CONTENT]; } WorkMsg;   /* id=-1 → quit */
+typedef struct { int id; double elapsed; char text[MAX_SUMMARY]; } ResultMsg;
 
-typedef struct {
-    char summary[MAX_SUMMARY_SIZE];
-    int chunk_id;
-    int summary_length;
-} ChunkSummary;
+/* ── globals (master only needs chunk_data; results stored here) ─────────── */
+static int       n_chunks;
+static char      chunk_data[MAX_CHUNKS][MAX_CONTENT];
+static ResultMsg g_results[MAX_CHUNKS];
 
-void master_process(int num_procs, char *input_file, char *topic);
-void worker_process(int rank, char *topic);
-int read_document_chunks(char *filename, DocumentChunk **chunks);
-void call_python_summarizer(char *chunk_text, char *topic, char *output_summary);
-void combine_summaries(ChunkSummary *summaries, int num_summaries, char *final_summary, char *topic);
+/* ── helpers ─────────────────────────────────────────────────────────────── */
 
-int main(int argc, char *argv[]) {
-    int rank, num_procs;
-    char input_file[MAX_FILENAME_SIZE];
-    char topic[256] = "General";
-    
+static int read_chunks(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) { perror(path); return -1; }
+    int cnt = 0;
+    while (!feof(f) && cnt < MAX_CHUNKS) {
+        size_t n = fread(chunk_data[cnt], 1, CHUNK_SIZE, f);
+        if (n == 0) break;
+        chunk_data[cnt][n] = '\0';
+        cnt++;
+    }
+    fclose(f);
+    return cnt;
+}
+
+/* strip single-quotes so the topic can be safely embedded in a shell command */
+static void safe_topic(const char *t, char *out, size_t max)
+{
+    size_t j = 0;
+    for (size_t i = 0; t[i] && j + 1 < max; i++)
+        if (t[i] != '\'') out[j++] = t[i];
+    out[j] = '\0';
+}
+
+/* call chunk_wrapper.py; uses rank+cid for unique temp-file names */
+static void call_wrapper(int rank, int cid, const char *text,
+                         const char *topic, char *summary, double *elapsed)
+{
+    char in_f[256], out_f[256], cmd[1600], stopic[256];
+
+    /* temp directory: honour $TMPDIR, fall back to /tmp */
+    const char *td = getenv("TMPDIR");
+    if (!td) td = getenv("TMP");
+    if (!td) td = getenv("TEMP");
+    if (!td) td = "/tmp";
+
+    snprintf(in_f,  sizeof(in_f),  "%s/hpc_mpi_in_%d_%d.txt",  td, rank, cid);
+    snprintf(out_f, sizeof(out_f), "%s/hpc_mpi_out_%d_%d.txt", td, rank, cid);
+
+    FILE *f = fopen(in_f, "w");
+    if (!f) {
+        snprintf(summary, MAX_SUMMARY, "[ERR: cannot open %s]", in_f);
+        *elapsed = 0.0;
+        return;
+    }
+    fputs(text, f);
+    fclose(f);
+
+    safe_topic(topic, stopic, sizeof(stopic));
+    snprintf(cmd, sizeof(cmd),
+             "python3 ./shared/chunk_wrapper.py '%s' '%s' '%s'",
+             in_f, stopic, out_f);
+
+    double t0 = MPI_Wtime();
+    int rc    = system(cmd);
+    *elapsed  = MPI_Wtime() - t0;
+
+    if (rc != 0) {
+        snprintf(summary, MAX_SUMMARY, "[wrapper exit %d for chunk %d]", rc, cid);
+    } else {
+        FILE *g = fopen(out_f, "r");
+        if (!g) {
+            snprintf(summary, MAX_SUMMARY, "[no output for chunk %d]", cid);
+        } else {
+            size_t n = fread(summary, 1, MAX_SUMMARY - 1, g);
+            summary[n] = '\0';
+            fclose(g);
+        }
+    }
+    remove(in_f);
+    remove(out_f);
+}
+
+/* ── master process ──────────────────────────────────────────────────────── */
+
+static void run_master(int nprocs, const char *topic)
+{
+    double wall_start = MPI_Wtime();
+    double seq_total  = 0.0;
+
+    int      next = 0, active = 0;
+    WorkMsg  wm;
+    ResultMsg rm;
+    MPI_Status st;
+
+    /* seed each worker with its first chunk */
+    for (int w = 1; w < nprocs && next < n_chunks; w++, next++, active++) {
+        wm.id = next;
+        strncpy(wm.text, chunk_data[next], MAX_CONTENT - 1);
+        wm.text[MAX_CONTENT - 1] = '\0';
+        MPI_Send(&wm, sizeof(WorkMsg), MPI_BYTE, w, TAG_WORK, MPI_COMM_WORLD);
+    }
+
+    /* dynamic scheduling: send next chunk as soon as a result arrives */
+    while (active > 0) {
+        MPI_Recv(&rm, sizeof(ResultMsg), MPI_BYTE,
+                 MPI_ANY_SOURCE, TAG_RESULT, MPI_COMM_WORLD, &st);
+        active--;
+        g_results[rm.id] = rm;
+        seq_total += rm.elapsed;
+
+        if (next < n_chunks) {
+            wm.id = next;
+            strncpy(wm.text, chunk_data[next], MAX_CONTENT - 1);
+            wm.text[MAX_CONTENT - 1] = '\0';
+            MPI_Send(&wm, sizeof(WorkMsg), MPI_BYTE,
+                     st.MPI_SOURCE, TAG_WORK, MPI_COMM_WORLD);
+            next++;
+            active++;
+        }
+    }
+
+    /* terminate all workers */
+    wm.id = -1;
+    wm.text[0] = '\0';
+    for (int w = 1; w < nprocs; w++)
+        MPI_Send(&wm, sizeof(WorkMsg), MPI_BYTE, w, TAG_WORK, MPI_COMM_WORLD);
+
+    /* write ordered summaries file */
+    FILE *sf = fopen("mpi_summaries.txt", "w");
+    if (sf) {
+        for (int i = 0; i < n_chunks; i++)
+            fprintf(sf, "=== Chunk %d ===\n%s\n\n", i + 1, g_results[i].text);
+        fclose(sf);
+    }
+
+    /* final combination via Python */
+    char cmd[512], stopic[256];
+    safe_topic(topic, stopic, sizeof(stopic));
+    snprintf(cmd, sizeof(cmd),
+             "python3 ./shared/final_combiner.py mpi_summaries.txt '%s' mpi_output.txt",
+             stopic);
+    system(cmd);
+
+    /* ── metrics ─────────────────────────────────────────────────────────── */
+    double wall     = MPI_Wtime() - wall_start;
+    int    workers  = nprocs - 1;
+    double speedup  = (wall > 0.0 && workers > 0) ? seq_total / wall : 1.0;
+    double eff      = (workers > 0) ? speedup / workers : 1.0;
+    long   n_cpu    = sysconf(_SC_NPROCESSORS_ONLN);
+    double cpu_util = (n_cpu > 0) ? (100.0 * workers / n_cpu) : 0.0;
+    if (cpu_util > 100.0) cpu_util = 100.0;
+
+    printf("\n");
+    printf("==================================================\n");
+    printf("           MPI Performance Metrics                \n");
+    printf("==================================================\n");
+    printf("  MPI Processes        : %d  (1 master + %d workers)\n", nprocs, workers);
+    printf("  Chunks Processed     : %d\n", n_chunks);
+    printf("  Execution Time       : %.3f s\n", wall);
+    printf("  Sequential Estimate  : %.3f s  (sum of chunk times)\n", seq_total);
+    printf("  Speedup              : %.2fx\n", speedup);
+    printf("  Efficiency           : %.1f%%\n", eff * 100.0);
+    printf("  Scalability          : %.1f%% of ideal linear speedup\n", eff * 100.0);
+    printf("  CPU Cores Available  : %ld\n", n_cpu);
+    printf("  Resource Utilization : %.1f%% CPU  (%d / %ld cores active)\n",
+           cpu_util, workers, n_cpu);
+    printf("  Output               : mpi_output.txt\n");
+    printf("==================================================\n");
+}
+
+/* ── worker process ──────────────────────────────────────────────────────── */
+
+static void run_worker(int rank, const char *topic)
+{
+    WorkMsg   wm;
+    ResultMsg rm;
+    MPI_Status st;
+
+    while (1) {
+        MPI_Recv(&wm, sizeof(WorkMsg), MPI_BYTE, 0, TAG_WORK, MPI_COMM_WORLD, &st);
+        if (wm.id < 0) break;          /* termination signal */
+
+        rm.id = wm.id;
+        call_wrapper(rank, wm.id, wm.text, topic, rm.text, &rm.elapsed);
+
+        MPI_Send(&rm, sizeof(ResultMsg), MPI_BYTE, 0, TAG_RESULT, MPI_COMM_WORLD);
+    }
+}
+
+/* ── main ────────────────────────────────────────────────────────────────── */
+
+int main(int argc, char **argv)
+{
+    int rank, nprocs;
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
-    
-    if (argc < 2) {
-        if (rank == 0) {
-            printf("Usage: %s <input_file> [topic]\n", argv[0]);
-            printf("Example: mpirun -np 4 %s document.txt \"Machine Learning\"\n", argv[0]);
-        }
+    MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+
+    if (argc < 3) {
+        if (!rank)
+            fprintf(stderr, "Usage: mpirun -np N %s <doc.txt> \"<topic>\"\n", argv[0]);
         MPI_Finalize();
         return 1;
     }
-    
-    strcpy(input_file, argv[1]);
-    if (argc >= 3) {
-        strcpy(topic, argv[2]);
+    if (nprocs < 2) {
+        if (!rank)
+            fprintf(stderr, "Error: need at least 2 MPI processes (1 master + 1 worker).\n");
+        MPI_Finalize();
+        return 1;
     }
-    
-    if (rank == 0) {
-        printf("=================================================\n");
-        printf("MPI Parallel Document Summarization\n");
-        printf("=================================================\n");
-        printf("Number of processes: %d\n", num_procs);
-        printf("Input file: %s\n", input_file);
-        printf("Topic: %s\n", topic);
-        printf("=================================================\n\n");
-        
-        master_process(num_procs, input_file, topic);
-    } else {
-        worker_process(rank, topic);
+
+    const char *doc   = argv[1];
+    const char *topic = argv[2];
+
+    if (!rank) {
+        n_chunks = read_chunks(doc);
+        if (n_chunks <= 0) {
+            fprintf(stderr, "Error: could not read document '%s'.\n", doc);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        printf("[MPI] processes=%d | chunks=%d | topic=\"%s\"\n",
+               nprocs, n_chunks, topic);
     }
-    
+
+    /* workers don't need n_chunks — they receive work until id == -1 */
+    if (!rank) run_master(nprocs, topic);
+    else        run_worker(rank, topic);
+
     MPI_Finalize();
     return 0;
-}
-
-void master_process(int num_procs, char *input_file, char *topic) {
-    DocumentChunk *chunks = NULL;
-    ChunkSummary *summaries = NULL;
-    int num_chunks, i;
-    double start_time, end_time;
-    MPI_Status status;
-    
-    start_time = MPI_Wtime();
-    
-    num_chunks = read_document_chunks(input_file, &chunks);
-    
-    if (num_chunks <= 0) {
-        printf("Error: Could not read document chunks\n");
-        
-        int terminate_signal = -1;
-        for (i = 1; i < num_procs; i++) {
-            MPI_Send(&terminate_signal, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
-        }
-        return;
-    }
-    
-    printf("Document split into %d chunks\n", num_chunks);
-    printf("Distributing chunks to %d worker processes...\n\n", num_procs - 1);
-    
-    summaries = (ChunkSummary *)malloc(num_chunks * sizeof(ChunkSummary));
-    
-    int chunks_sent = 0;
-    int chunks_received = 0;
-    
-    for (i = 1; i < num_procs && chunks_sent < num_chunks; i++) {
-        MPI_Send(&chunks[chunks_sent].chunk_id, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
-        MPI_Send(&chunks[chunks_sent].text_length, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
-        MPI_Send(chunks[chunks_sent].text, chunks[chunks_sent].text_length, MPI_CHAR, i, 0, MPI_COMM_WORLD);
-        
-        printf("Master: Sent chunk %d to process %d\n", chunks_sent, i);
-        chunks_sent++;
-    }
-    
-    while (chunks_received < num_chunks) {
-        int chunk_id, summary_length;
-        
-        MPI_Recv(&chunk_id, 1, MPI_INT, MPI_ANY_SOURCE, 1, MPI_COMM_WORLD, &status);
-        MPI_Recv(&summary_length, 1, MPI_INT, status.MPI_SOURCE, 1, MPI_COMM_WORLD, &status);
-        MPI_Recv(summaries[chunks_received].summary, summary_length, MPI_CHAR, status.MPI_SOURCE, 1, MPI_COMM_WORLD, &status);
-        
-        summaries[chunks_received].chunk_id = chunk_id;
-        summaries[chunks_received].summary_length = summary_length;
-        summaries[chunks_received].summary[summary_length] = '\0';
-        
-        printf("Master: Received summary for chunk %d from process %d\n", chunk_id, status.MPI_SOURCE);
-        chunks_received++;
-        
-        if (chunks_sent < num_chunks) {
-            MPI_Send(&chunks[chunks_sent].chunk_id, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
-            MPI_Send(&chunks[chunks_sent].text_length, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
-            MPI_Send(chunks[chunks_sent].text, chunks[chunks_sent].text_length, MPI_CHAR, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
-            
-            printf("Master: Sent chunk %d to process %d\n", chunks_sent, status.MPI_SOURCE);
-            chunks_sent++;
-        } else {
-            int terminate_signal = -1;
-            MPI_Send(&terminate_signal, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
-        }
-    }
-    
-    printf("\nAll chunks processed. Combining summaries...\n");
-    
-    char final_summary[MAX_SUMMARY_SIZE * 10];
-    combine_summaries(summaries, num_chunks, final_summary, topic);
-    
-    end_time = MPI_Wtime();
-    
-    printf("\n=================================================\n");
-    printf("FINAL SUMMARY\n");
-    printf("=================================================\n");
-    printf("%s\n", final_summary);
-    printf("=================================================\n");
-    printf("Total execution time: %.4f seconds\n", end_time - start_time);
-    printf("Chunks processed: %d\n", num_chunks);
-    printf("Average time per chunk: %.4f seconds\n", (end_time - start_time) / num_chunks);
-    printf("=================================================\n");
-    
-    FILE *output = fopen("mpi_summary_output.txt", "w");
-    if (output) {
-        fprintf(output, "MPI Parallel Document Summarization Results\n");
-        fprintf(output, "===========================================\n\n");
-        fprintf(output, "Input File: %s\n", input_file);
-        fprintf(output, "Topic: %s\n", topic);
-        fprintf(output, "Number of Processes: %d\n", num_procs);
-        fprintf(output, "Number of Chunks: %d\n", num_chunks);
-        fprintf(output, "Execution Time: %.4f seconds\n\n", end_time - start_time);
-        fprintf(output, "FINAL SUMMARY:\n");
-        fprintf(output, "%s\n", final_summary);
-        fclose(output);
-        printf("\nResults saved to mpi_summary_output.txt\n");
-    }
-    
-    free(chunks);
-    free(summaries);
-}
-
-void worker_process(int rank, char *topic) {
-    MPI_Status status;
-    int chunk_id, text_length;
-    char chunk_text[MAX_CHUNK_SIZE];
-    char summary[MAX_SUMMARY_SIZE];
-    
-    while (1) {
-        MPI_Recv(&chunk_id, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
-        
-        if (chunk_id == -1) {
-            printf("Process %d: Received termination signal\n", rank);
-            break;
-        }
-        
-        MPI_Recv(&text_length, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
-        MPI_Recv(chunk_text, text_length, MPI_CHAR, 0, 0, MPI_COMM_WORLD, &status);
-        chunk_text[text_length] = '\0';
-        
-        printf("Process %d: Processing chunk %d (%d bytes)\n", rank, chunk_id, text_length);
-        
-        call_python_summarizer(chunk_text, topic, summary);
-        
-        int summary_length = strlen(summary);
-        
-        MPI_Send(&chunk_id, 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
-        MPI_Send(&summary_length, 1, MPI_INT, 0, 1, MPI_COMM_WORLD);
-        MPI_Send(summary, summary_length, MPI_CHAR, 0, 1, MPI_COMM_WORLD);
-        
-        printf("Process %d: Sent summary for chunk %d (%d bytes)\n", rank, chunk_id, summary_length);
-    }
-}
-
-int read_document_chunks(char *filename, DocumentChunk **chunks) {
-    FILE *file = fopen(filename, "r");
-    if (!file) {
-        printf("Error: Cannot open file %s\n", filename);
-        return -1;
-    }
-    
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    
-    char *full_text = (char *)malloc(file_size + 1);
-    fread(full_text, 1, file_size, file);
-    full_text[file_size] = '\0';
-    fclose(file);
-    
-    int chunk_size = 2000;
-    int num_chunks = (file_size + chunk_size - 1) / chunk_size;
-    
-    *chunks = (DocumentChunk *)malloc(num_chunks * sizeof(DocumentChunk));
-    
-    int chunk_idx = 0;
-    for (int i = 0; i < file_size; i += chunk_size) {
-        int current_chunk_size = (i + chunk_size > file_size) ? (file_size - i) : chunk_size;
-        
-        strncpy((*chunks)[chunk_idx].text, full_text + i, current_chunk_size);
-        (*chunks)[chunk_idx].text[current_chunk_size] = '\0';
-        (*chunks)[chunk_idx].chunk_id = chunk_idx;
-        (*chunks)[chunk_idx].text_length = current_chunk_size;
-        
-        chunk_idx++;
-    }
-    
-    free(full_text);
-    return num_chunks;
-}
-
-void call_python_summarizer(char *chunk_text, char *topic, char *output_summary) {
-    char temp_input_file[256];
-    char temp_output_file[256];
-    
-    sprintf(temp_input_file, "temp_chunk_%d.txt", getpid());
-    sprintf(temp_output_file, "temp_summary_%d.txt", getpid());
-    
-    FILE *input = fopen(temp_input_file, "w");
-    if (input) {
-        fprintf(input, "%s", chunk_text);
-        fclose(input);
-    }
-    
-    char command[1024];
-    sprintf(command, "python mpi_python_wrapper.py \"%s\" \"%s\" \"%s\"", 
-            temp_input_file, topic, temp_output_file);
-    
-    system(command);
-    
-    FILE *output = fopen(temp_output_file, "r");
-    if (output) {
-        fread(output_summary, 1, MAX_SUMMARY_SIZE - 1, output);
-        output_summary[MAX_SUMMARY_SIZE - 1] = '\0';
-        fclose(output);
-    } else {
-        strcpy(output_summary, "[Summary generation failed]");
-    }
-    
-    remove(temp_input_file);
-    remove(temp_output_file);
-}
-
-void combine_summaries(ChunkSummary *summaries, int num_summaries, char *final_summary, char *topic) {
-    char combined_file[256];
-    sprintf(combined_file, "temp_combined_%d.txt", getpid());
-    
-    FILE *combined = fopen(combined_file, "w");
-    if (combined) {
-        for (int i = 0; i < num_summaries; i++) {
-            fprintf(combined, "%s\n\n", summaries[i].summary);
-        }
-        fclose(combined);
-    }
-    
-    char output_file[256];
-    sprintf(output_file, "temp_final_%d.txt", getpid());
-    
-    char command[1024];
-    sprintf(command, "python mpi_final_combiner.py \"%s\" \"%s\" \"%s\"", 
-            combined_file, topic, output_file);
-    
-    system(command);
-    
-    FILE *output = fopen(output_file, "r");
-    if (output) {
-        fread(final_summary, 1, MAX_SUMMARY_SIZE * 10 - 1, output);
-        final_summary[MAX_SUMMARY_SIZE * 10 - 1] = '\0';
-        fclose(output);
-    } else {
-        strcpy(final_summary, "[Final summary generation failed]");
-    }
-    
-    remove(combined_file);
-    remove(output_file);
 }

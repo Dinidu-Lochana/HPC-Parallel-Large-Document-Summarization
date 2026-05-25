@@ -1,0 +1,15 @@
+This document discusses a system for removing unwanted reflections from photographs taken through glass, such as those from cars, airplanes, or buildings. The system operates on linear (RAW) photos and can use an optional contextual photo to help disambiguate reflections. It uses a combination of a base model and an up-sampling model to produce high-quality, reflection-free images at full resolution.
+
+The removal of reflections from photos is a challenging task due to the diverse range of locations and situations in which they occur. Current methods have limitations, including restrictions on data collection and unrealistic training data. The proposed system aims to address these challenges by synthesizing realistic and diverse photos in large quantities to train the model.
+
+The system uses a novel approach to simulate reflections, taking into account the illuminant color and power on both sides of the glass. It utilizes a linear XYZ color space to simulate photometrically accurate reflections, allowing for the creation of synthetic training data that can generalize to real-world photos from various cameras.
+
+The system consists of two models: a base model that uses a multi-scale backbone and feature pyramid network to project input images into a high-dimensional space and compute semantic features, and an upsampler that uses a Gaussian pyramid to upscale the predicted outputs. The system is trained end-to-end from random weights using a combination of losses and an adversary.
+
+The approach outperforms prior methods, including those that use multi-image capture and machine learning. It demonstrates state-of-the-art results on real-world photos, and can handle high-resolution images beyond 4K pixels. The system is also sensitive to hidden reflections and can remove lens flares.
+
+The use of RAW images is highlighted as important, as it allows for photometrically accurate simulations and produces more realistic results. The system's performance is demonstrated through visual comparisons and empirical values, showcasing its ability to recover the original image and separate reflections.
+
+The document also references various research papers and conference proceedings related to computer vision and image processing, specifically single image reflection separation and removal. These papers propose different methods and techniques for removing reflections from images, such as using polarized cues, flash-only cues, or categorized datasets to improve the removal process.
+
+Overall, the system presents a novel approach to removing reflections from photographs taken through glass, using a combination of synthetic training data, RAW images, and a two-model architecture. It demonstrates state-of-the-art results and has the potential to improve image quality and editing capabilities in various applications.
